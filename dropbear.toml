@@ -2,9 +2,6 @@ binaries = ["dropbear", "mkfifo", "chmod"]
 paths = "/etc/dropbear"
 mount_devpts = true
 
-[masks.custom_init]
-"ugrd.base.console" = "custom_init"
-
 [imports.config_processing]
 "dropbear" = [ "_process_dropbear_authorized_keys" ]
 
@@ -14,8 +11,11 @@ mount_devpts = true
 [imports.build_final]
 "dropbear" = [ "dropbear_finalize" ]
 
-[imports.custom_init]
-"dropbear" = [ "dropbear_init" ]
+[imports.init_unlock]
+"dropbear" = [ "dropbear_init_unlock" ]
+
+[import_order.after]
+"dropbear_init_unlock" = "init_net"
 
 [custom_parameters]
 dropbear_authorized_keys = "Path"

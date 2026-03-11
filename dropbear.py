@@ -1,4 +1,4 @@
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 from pathlib import Path
 from typing import Union
@@ -78,22 +78,13 @@ def dropbear_finalize(self):
     authorized_keys_file.chmod(0o600)
 
 
-def dropbear_init(self):
-    """Custom init using FIFO: console and SSH race to provide passphrase.
-    All post-unlock steps (lvm, mount, switch_root) run in PID 1 context."""
+def dropbear_init_unlock(self):
+    """init_unlock hook: FIFO-based unlock. Runs after init_net, before init_main.
+    Console and SSH race to provide the passphrase. cryptsetup reads from the FIFO."""
 
     names = list(self["cryptsetup"].keys())
 
-    # custom_init_contents is just a dummy - we don't use agetty/SSH session for init
-    # It won't be called since run_init handles everything inline in PID 1
-    custom_init_contents = [
-        self["shebang"],
-        '# This file is not used - all init happens in PID 1',
-    ]
-
-    run_init = [
-        "print_banner",
-        '# Create FIFO for passphrase',
+    out = [
         f'mkfifo {CRYPT_FIFO}',
         f'chmod 600 {CRYPT_FIFO}',
         '# Start console passphrase prompt in background',
@@ -109,9 +100,8 @@ def dropbear_init(self):
         f"dropbear -R -E -j -k -s -c /{UNLOCK_SCRIPT} -P /run/dropbear.pid || ewarn 'Failed to start dropbear'",
     ]
 
-    # Unlock each LUKS volume using FIFO
     for name in names:
-        run_init += [
+        out += [
             f'if ! cryptsetup status {name} > /dev/null 2>&1; then',
             f'    einfo "Waiting for passphrase to unlock: {name}"',
             f'    cryptsetup open --tries 1 --key-file {CRYPT_FIFO} $(get_crypt_dev {name}) {name} || rd_fail "Failed to unlock {name}"',
@@ -120,7 +110,7 @@ def dropbear_init(self):
             f'fi',
         ]
 
-    run_init += [
+    out += [
         '# Unlock done - kill console prompt and dropbear',
         'kill "$CONSOLE_PID" 2>/dev/null || true',
         'if [ -f /run/dropbear.pid ]; then',
@@ -128,11 +118,6 @@ def dropbear_init(self):
         '    rm -f /run/dropbear.pid',
         'fi',
         f'rm -f {CRYPT_FIFO}',
-        '# Now run LVM, mount and the rest of init inline in PID 1',
-        'handle_resume',
-        'init_lvm',
-        'mount_root',
-        'ext4_fsck',
     ]
 
-    return run_init, custom_init_contents
+    return out
