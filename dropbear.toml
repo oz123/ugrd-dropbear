@@ -1,6 +1,9 @@
-binaries = ["dropbear"]
+binaries = ["dropbear", "setsid"]
 paths = "/etc/dropbear"
 mount_devpts = true
+
+[masks.custom_init]
+"ugrd.base.console" = "custom_init"
 
 [imports.config_processing]
 "dropbear" = [ "_process_dropbear_authorized_keys" ]
@@ -11,19 +14,8 @@ mount_devpts = true
 [imports.build_final]
 "dropbear" = [ "dropbear_finalize" ]
 
-[imports.init_pre]
-"dropbear" = [ "drop_the_bear_background" ]
-
-[imports.init_main]
-"dropbear" = [ "remote_unlock_wait", "remote_unlock_cleanup" ]
-
-[imports.init_mount]
-"dropbear" = [ "stop_dropbear" ]
-
-[import_order.after]
-drop_the_bear_background = "init_net"
-remote_unlock_wait = "handle_resume"
-remote_unlock_cleanup = "crypt_init"
+[imports.custom_init]
+"dropbear" = [ "dropbear_init" ]
 
 [custom_parameters]
 dropbear_authorized_keys = "Path"
