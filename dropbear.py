@@ -99,7 +99,7 @@ def dropbear_init_unlock(self):
         'else',
         '    ewarn "Network does not appear to be ready"',
         'fi',
-        f"dropbear -R -E -j -k -s -c /{UNLOCK_SCRIPT} -P /run/dropbear.pid || ewarn 'Failed to start dropbear'",
+        f"dropbear -R -j -k -s -c /{UNLOCK_SCRIPT} -P /run/dropbear.pid 2>/dev/null || ewarn 'Failed to start dropbear'",
     ]
 
     for name in names:
