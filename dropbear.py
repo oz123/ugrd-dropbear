@@ -9,24 +9,57 @@ from zenlib.util import contains
 UNLOCK_SCRIPT = "unlock.sh"
 
 
-def drop_the_bear_background(self) -> str:
+def drop_the_bear_background(self) -> list:
     """Start dropbear in the background as a remote unlock path.
     The forced command is /unlock.sh which only prompts for the LUKS passphrase."""
     return [
-        'einfo "Starting dropbear for remote unlock"',
-        f"dropbear -R -E -j -k -s -c /{UNLOCK_SCRIPT} -P /run/dropbear.pid || ewarn 'Failed to start dropbear'",
+        'ip_addr=$(ip addr show | awk \'/inet / {print $2}\' | grep -v "127.0.0.1")',
+        'if [ -n "$ip_addr" ]; then',
+        '    einfo "Network is UP: $ip_addr"',
+        'else',
+        '    ewarn "Network does not appear to be ready"',
+        'fi',
+        'einfo "Starting dropbear for remote unlock on port 22"',
+        f"dropbear -R -E -j -k -s -c /{UNLOCK_SCRIPT} -P /run/dropbear.pid && einfo 'Dropbear started, SSH available' || ewarn 'Failed to start dropbear'",
     ]
 
 
-def stop_dropbear(self) -> str:
+def stop_dropbear(self) -> list:
     """Kill dropbear after root is mounted."""
-    return """
-    if [ -f /run/dropbear.pid ]; then
-        einfo "Remote unlock complete, killing dropbear."
-        kill -9 $(cat /run/dropbear.pid) 2>/dev/null
-        rm -f /run/dropbear.pid
-    fi
-    """
+    return [
+        'if [ -f /run/dropbear.pid ]; then',
+        '    einfo "Remote unlock complete, killing dropbear."',
+        '    kill -9 $(cat /run/dropbear.pid) 2>/dev/null',
+        '    rm -f /run/dropbear.pid',
+        'fi',
+    ]
+
+
+def crypt_poll(self) -> list:
+    """Start a background poller that detects remote unlock via signal file
+    and sends a newline to unblock the console cryptsetup passphrase prompt."""
+    return [
+        '# Background poller: unblocks console prompt when remote unlock completes',
+        '(',
+        '    while true; do',
+        '        if [ -f /run/ugrd/remote_unlocked ]; then',
+        '            einfo "Remote unlock detected, unblocking console"',
+        '            printf "\\n" > /dev/tty0 2>/dev/null || true',
+        '            break',
+        '        fi',
+        '        sleep 1',
+        '    done',
+        ') &',
+        'CRYPT_POLLER_PID=$!',
+    ]
+
+
+def crypt_poll_cleanup(self) -> list:
+    """Kill the background poller after crypt_init completes."""
+    return [
+        'kill "$CRYPT_POLLER_PID" 2>/dev/null || true',
+        'rm -f /run/ugrd/remote_unlocked',
+    ]
 
 
 def _process_dropbear_authorized_keys(self, authorized_key_path: Union[str, Path]):
@@ -51,7 +84,6 @@ def add_dropbear_keys(self):
 def add_unlock_script(self):
     """Generates and deploys the unlock helper script used as dropbear forced command.
     The script prompts for the LUKS passphrase and exits — no shell access."""
-    # Build the unlock script lines
     lines = [
         "#!/bin/sh -l",
         'einfo "Remote LUKS unlock session"',
@@ -67,7 +99,10 @@ def add_unlock_script(self):
             "fi",
         ]
 
-    lines += ['einfo "Unlock complete, you may close this session."']
+    lines += [
+        'touch /run/ugrd/remote_unlocked',
+        'einfo "Unlock complete, you may close this session."',
+    ]
 
     script_path = self._get_build_path(UNLOCK_SCRIPT)
     script_path.parent.mkdir(parents=True, exist_ok=True)

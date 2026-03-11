@@ -17,11 +17,16 @@ mount_devpts = true
 [imports.init_pre]
 "dropbear" = [ "drop_the_bear_background" ]
 
+[imports.init_main]
+"dropbear" = [ "crypt_poll", "crypt_poll_cleanup" ]
+
 [imports.init_mount]
 "dropbear" = [ "stop_dropbear" ]
 
 [import_order.after]
-drop_the_bear_background = "init_net"  # Start dropbear after network is up
+drop_the_bear_background = "init_net"
+crypt_poll = "handle_resume"
+crypt_poll_cleanup = "crypt_init"
 
 [custom_parameters]
 dropbear_authorized_keys = "Path"
