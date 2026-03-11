@@ -85,6 +85,8 @@ def dropbear_init_unlock(self):
     names = list(self["cryptsetup"].keys())
 
     out = [
+        '# Suppress kernel messages during passphrase prompt',
+        'echo 0 > /proc/sys/kernel/printk',
         f'mkfifo {CRYPT_FIFO}',
         f'chmod 600 {CRYPT_FIFO}',
         '# Start console passphrase prompt in background',
@@ -118,6 +120,8 @@ def dropbear_init_unlock(self):
         '    rm -f /run/dropbear.pid',
         'fi',
         f'rm -f {CRYPT_FIFO}',
+        '# Restore kernel messages',
+        'echo 4 > /proc/sys/kernel/printk',
     ]
 
     return out
