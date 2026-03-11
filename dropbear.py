@@ -9,7 +9,7 @@ from zenlib.util import contains
 def drop_the_bear(self) -> str:
     """Returns shell lines to kill the dropbear server if the switch_root_target is mounted"""
     return """
-    if [ -n "$(awk '$2 == "'"$(cat /run/vars/SWITCH_ROOT_TARGET)"'" {print $2}' /proc/mounts)" ]; then
+    if [ -n "$(awk '$2 == "'"$(readvar SWITCH_ROOT_TARGET)"'" {print $2}' /proc/mounts)" ]; then
         einfo "Switch root target mounted, killing dropbear."
         kill -9 $(cat /run/dropbear.pid)
         return
