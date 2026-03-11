@@ -36,33 +36,30 @@ def add_unlock_script(self):
         "#!/bin/sh -l",
         'einfo "Remote LUKS unlock - enter passphrase:"',
         f'if [ ! -p "{CRYPT_FIFO}" ]; then',
-        f'    eerror "Unlock FIFO not ready, boot may have already proceeded"',
+        '    eerror "Unlock FIFO not ready"',
         '    exit 1',
         'fi',
-        '# Read passphrase without echo and write to FIFO',
         'stty -echo',
         'printf "Passphrase: "',
         'read -r PASSPHRASE',
         'stty echo',
         'printf "\\n"',
         f'printf "%s" "$PASSPHRASE" > {CRYPT_FIFO}',
-        'einfo "Passphrase sent, unlock in progress..."',
+        'einfo "Passphrase sent, you may close this session."',
     ]
     script_path = self._get_build_path(UNLOCK_SCRIPT)
     script_path.parent.mkdir(parents=True, exist_ok=True)
     self._write(UNLOCK_SCRIPT, "\n".join(lines) + "\n")
     script_path.chmod(0o755)
-    self.logger.info("Wrote unlock script to: %s" % script_path)
 
 
 def add_console_prompt_script(self):
     """Console script: prompts for passphrase on tty0, writes to FIFO."""
     lines = [
         "#!/bin/sh",
-        '# Console passphrase prompt - writes to FIFO for cryptsetup',
         'exec </dev/tty0 >/dev/tty0 2>/dev/tty0',
         'stty -echo',
-        'printf "\\nEnter LUKS passphrase (console): "',
+        'printf "\\nEnter LUKS passphrase: "',
         'read -r PASSPHRASE',
         'stty echo',
         'printf "\\n"',
@@ -72,7 +69,6 @@ def add_console_prompt_script(self):
     script_path.parent.mkdir(parents=True, exist_ok=True)
     self._write(CONSOLE_PROMPT_SCRIPT, "\n".join(lines) + "\n")
     script_path.chmod(0o755)
-    self.logger.info("Wrote console prompt script to: %s" % script_path)
 
 
 def dropbear_finalize(self):
@@ -83,21 +79,21 @@ def dropbear_finalize(self):
 
 
 def dropbear_init(self):
-    """Custom init: uses a FIFO so either console or SSH can provide the passphrase.
-    cryptsetup reads from the FIFO - whichever path writes first wins."""
+    """Custom init using FIFO: console and SSH race to provide passphrase.
+    All post-unlock steps (lvm, mount, switch_root) run in PID 1 context."""
 
     names = list(self["cryptsetup"].keys())
 
+    # custom_init_contents is just a dummy - we don't use agetty/SSH session for init
+    # It won't be called since run_init handles everything inline in PID 1
     custom_init_contents = [
         self["shebang"],
-        f'einfo "Starting dropbear module v{__version__}"',
-        "print_banner",
-        *self.generate_init_main(),
+        '# This file is not used - all init happens in PID 1',
     ]
 
     run_init = [
         "print_banner",
-        f'# Create FIFO for passphrase passing',
+        '# Create FIFO for passphrase',
         f'mkfifo {CRYPT_FIFO}',
         f'chmod 600 {CRYPT_FIFO}',
         '# Start console passphrase prompt in background',
@@ -113,15 +109,12 @@ def dropbear_init(self):
         f"dropbear -R -E -j -k -s -c /{UNLOCK_SCRIPT} -P /run/dropbear.pid || ewarn 'Failed to start dropbear'",
     ]
 
-    # For each LUKS volume, unlock using the FIFO as key-file
+    # Unlock each LUKS volume using FIFO
     for name in names:
         run_init += [
             f'if ! cryptsetup status {name} > /dev/null 2>&1; then',
             f'    einfo "Waiting for passphrase to unlock: {name}"',
-            f'    cryptsetup open --tries 1 --key-file {CRYPT_FIFO} $(get_crypt_dev {name}) {name} || {{',
-            f'        eerror "Failed to unlock {name}"',
-            f'        rd_fail',
-            f'    }}',
+            f'    cryptsetup open --tries 1 --key-file {CRYPT_FIFO} $(get_crypt_dev {name}) {name} || rd_fail "Failed to unlock {name}"',
             f'else',
             f'    ewarn "Device already open: {name}"',
             f'fi',
@@ -135,6 +128,11 @@ def dropbear_init(self):
         '    rm -f /run/dropbear.pid',
         'fi',
         f'rm -f {CRYPT_FIFO}',
+        '# Now run LVM, mount and the rest of init inline in PID 1',
+        'handle_resume',
+        'init_lvm',
+        'mount_root',
+        'ext4_fsck',
     ]
 
     return run_init, custom_init_contents
