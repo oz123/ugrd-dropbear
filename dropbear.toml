@@ -2,9 +2,6 @@ binaries = ["dropbear"]
 paths = "/etc/dropbear"
 mount_devpts = true
 
-# No masks - ugrd.base.console runs normally on the local TTY
-# Dropbear runs in the background as a secondary remote unlock path
-
 [imports.config_processing]
 "dropbear" = [ "_process_dropbear_authorized_keys" ]
 
@@ -18,15 +15,15 @@ mount_devpts = true
 "dropbear" = [ "drop_the_bear_background" ]
 
 [imports.init_main]
-"dropbear" = [ "crypt_poll", "crypt_poll_cleanup" ]
+"dropbear" = [ "remote_unlock_wait", "remote_unlock_cleanup" ]
 
 [imports.init_mount]
 "dropbear" = [ "stop_dropbear" ]
 
 [import_order.after]
 drop_the_bear_background = "init_net"
-crypt_poll = "handle_resume"
-crypt_poll_cleanup = "crypt_init"
+remote_unlock_wait = "handle_resume"
+remote_unlock_cleanup = "crypt_init"
 
 [custom_parameters]
 dropbear_authorized_keys = "Path"
