@@ -1,4 +1,4 @@
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 from pathlib import Path
 from typing import Union
@@ -7,6 +7,8 @@ from zenlib.util import contains
 
 
 UNLOCK_SCRIPT = "unlock.sh"
+CONSOLE_PROMPT_SCRIPT = "console_prompt.sh"
+CRYPT_FIFO = "/run/ugrd/crypt_fifo"
 
 
 def _process_dropbear_authorized_keys(self, authorized_key_path: Union[str, Path]):
@@ -29,28 +31,48 @@ def add_dropbear_keys(self):
 
 
 def add_unlock_script(self):
-    """Generates the SSH forced-command unlock script."""
+    """SSH forced-command script: prompts for passphrase, writes to FIFO."""
     lines = [
         "#!/bin/sh -l",
-        'einfo "Remote LUKS unlock session"',
-    ]
-    for name in self["cryptsetup"]:
-        lines += [
-            f"if cryptsetup status {name} > /dev/null 2>&1; then",
-            f'    einfo "Device already unlocked: {name}"',
-            "else",
-            f'    einfo "Unlocking: {name}"',
-            f"    cryptsetup open $(get_crypt_dev {name}) {name} --tries 3 || exit 1",
-            "fi",
-        ]
-    lines += [
-        'einfo "Unlock complete, you may close this session."',
+        'einfo "Remote LUKS unlock - enter passphrase:"',
+        f'if [ ! -p "{CRYPT_FIFO}" ]; then',
+        f'    eerror "Unlock FIFO not ready, boot may have already proceeded"',
+        '    exit 1',
+        'fi',
+        '# Read passphrase without echo and write to FIFO',
+        'stty -echo',
+        'printf "Passphrase: "',
+        'read -r PASSPHRASE',
+        'stty echo',
+        'printf "\\n"',
+        f'printf "%s" "$PASSPHRASE" > {CRYPT_FIFO}',
+        'einfo "Passphrase sent, unlock in progress..."',
     ]
     script_path = self._get_build_path(UNLOCK_SCRIPT)
     script_path.parent.mkdir(parents=True, exist_ok=True)
     self._write(UNLOCK_SCRIPT, "\n".join(lines) + "\n")
     script_path.chmod(0o755)
     self.logger.info("Wrote unlock script to: %s" % script_path)
+
+
+def add_console_prompt_script(self):
+    """Console script: prompts for passphrase on tty0, writes to FIFO."""
+    lines = [
+        "#!/bin/sh",
+        '# Console passphrase prompt - writes to FIFO for cryptsetup',
+        'exec </dev/tty0 >/dev/tty0 2>/dev/tty0',
+        'stty -echo',
+        'printf "\\nEnter LUKS passphrase (console): "',
+        'read -r PASSPHRASE',
+        'stty echo',
+        'printf "\\n"',
+        f'printf "%s" "$PASSPHRASE" > {CRYPT_FIFO}',
+    ]
+    script_path = self._get_build_path(CONSOLE_PROMPT_SCRIPT)
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    self._write(CONSOLE_PROMPT_SCRIPT, "\n".join(lines) + "\n")
+    script_path.chmod(0o755)
+    self.logger.info("Wrote console prompt script to: %s" % script_path)
 
 
 def dropbear_finalize(self):
@@ -61,13 +83,10 @@ def dropbear_finalize(self):
 
 
 def dropbear_init(self):
-    """Custom init: runs init_main.sh on console in background, starts dropbear
-    for SSH unlock, waits for LUKS to be unlocked by either path, then continues boot."""
+    """Custom init: uses a FIFO so either console or SSH can provide the passphrase.
+    cryptsetup reads from the FIFO - whichever path writes first wins."""
 
     names = list(self["cryptsetup"].keys())
-    luks_check = " && ".join(
-        [f"cryptsetup status {n} > /dev/null 2>&1" for n in names]
-    )
 
     custom_init_contents = [
         self["shebang"],
@@ -78,8 +97,11 @@ def dropbear_init(self):
 
     run_init = [
         "print_banner",
-        '# Start console unlock in background',
-        f"setsid {self['_custom_init_file']} </dev/tty0 >/dev/tty0 2>/dev/tty0 &",
+        f'# Create FIFO for passphrase passing',
+        f'mkfifo {CRYPT_FIFO}',
+        f'chmod 600 {CRYPT_FIFO}',
+        '# Start console passphrase prompt in background',
+        f'/{CONSOLE_PROMPT_SCRIPT} &',
         'CONSOLE_PID=$!',
         '# Start dropbear for SSH unlock',
         'ip_addr=$(ip addr show | awk \'/inet / {print $2}\' | grep -v "127.0.0.1")',
@@ -89,21 +111,30 @@ def dropbear_init(self):
         '    ewarn "Network does not appear to be ready"',
         'fi',
         f"dropbear -R -E -j -k -s -c /{UNLOCK_SCRIPT} -P /run/dropbear.pid || ewarn 'Failed to start dropbear'",
-        '# Wait for LUKS to be unlocked by either path',
-        'einfo "Waiting for LUKS unlock (console or SSH)..."',
-        'while true; do',
-        f'    if {luks_check}; then',
-        '        break',
-        '    fi',
-        '    sleep 1',
-        'done',
-        'einfo "LUKS unlocked, continuing boot"',
-        '# Kill console process and dropbear',
+    ]
+
+    # For each LUKS volume, unlock using the FIFO as key-file
+    for name in names:
+        run_init += [
+            f'if ! cryptsetup status {name} > /dev/null 2>&1; then',
+            f'    einfo "Waiting for passphrase to unlock: {name}"',
+            f'    cryptsetup open --tries 1 --key-file {CRYPT_FIFO} $(get_crypt_dev {name}) {name} || {{',
+            f'        eerror "Failed to unlock {name}"',
+            f'        rd_fail',
+            f'    }}',
+            f'else',
+            f'    ewarn "Device already open: {name}"',
+            f'fi',
+        ]
+
+    run_init += [
+        '# Unlock done - kill console prompt and dropbear',
         'kill "$CONSOLE_PID" 2>/dev/null || true',
         'if [ -f /run/dropbear.pid ]; then',
         '    kill -9 $(cat /run/dropbear.pid) 2>/dev/null || true',
         '    rm -f /run/dropbear.pid',
         'fi',
+        f'rm -f {CRYPT_FIFO}',
     ]
 
     return run_init, custom_init_contents

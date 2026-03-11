@@ -1,4 +1,4 @@
-binaries = ["dropbear", "setsid"]
+binaries = ["dropbear", "mkfifo", "chmod"]
 paths = "/etc/dropbear"
 mount_devpts = true
 
@@ -9,7 +9,7 @@ mount_devpts = true
 "dropbear" = [ "_process_dropbear_authorized_keys" ]
 
 [imports.build_tasks]
-"dropbear" = [ "add_dropbear_keys", "add_unlock_script" ]
+"dropbear" = [ "add_dropbear_keys", "add_unlock_script", "add_console_prompt_script" ]
 
 [imports.build_final]
 "dropbear" = [ "dropbear_finalize" ]
