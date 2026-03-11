@@ -1,25 +1,27 @@
 binaries = ["dropbear"]
-
 paths = "/etc/dropbear"
 mount_devpts = true
 
-[masks.custom_init]
-"ugrd.base.console" = "custom_init"  # Don't use the normal console module as well
+# No masks - ugrd.base.console runs normally on the local TTY
+# Dropbear runs in the background as a secondary remote unlock path
 
 [imports.config_processing]
 "dropbear" = [ "_process_dropbear_authorized_keys" ]
 
-[imports.functions]
-"dropbear" = [ "dropbear_wait", "drop_the_bear" ]
-
-[imports.custom_init]
-"dropbear" = [ "dropbear_init" ]
-
 [imports.build_tasks]
-"dropbear" = [ "add_dropbear_keys" ]
+"dropbear" = [ "add_dropbear_keys", "add_unlock_script" ]
 
 [imports.build_final]
 "dropbear" = [ "dropbear_finalize" ]
 
+[imports.init_pre]
+"dropbear" = [ "drop_the_bear_background" ]
+
+[imports.init_mount]
+"dropbear" = [ "stop_dropbear" ]
+
+[import_order.after]
+drop_the_bear_background = "init_net"  # Start dropbear after network is up
+
 [custom_parameters]
-dropbear_authorized_keys = "Path"  # Path to the authorized_keys file
+dropbear_authorized_keys = "Path"

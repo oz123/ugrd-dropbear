@@ -1,4 +1,4 @@
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 from pathlib import Path
 from typing import Union
@@ -6,16 +6,26 @@ from typing import Union
 from zenlib.util import contains
 
 
-def drop_the_bear(self) -> str:
-    """Returns shell lines to kill the dropbear server if the switch_root_target is mounted"""
+UNLOCK_SCRIPT = "unlock.sh"
+
+
+def drop_the_bear_background(self) -> str:
+    """Start dropbear in the background as a remote unlock path.
+    The forced command is /unlock.sh which only prompts for the LUKS passphrase."""
+    return [
+        'einfo "Starting dropbear for remote unlock"',
+        f"dropbear -R -E -j -k -s -c /{UNLOCK_SCRIPT} -P /run/dropbear.pid || ewarn 'Failed to start dropbear'",
+    ]
+
+
+def stop_dropbear(self) -> str:
+    """Kill dropbear after root is mounted."""
     return """
-    if [ -n "$(awk '$2 == "'"$(cat /run/vars/SWITCH_ROOT_TARGET)"'" {print $2}' /proc/mounts)" ]; then
-        einfo "Switch root target mounted, killing dropbear."
-        kill -9 $(cat /run/dropbear.pid)
-        return
+    if [ -f /run/dropbear.pid ]; then
+        einfo "Remote unlock complete, killing dropbear."
+        kill -9 $(cat /run/dropbear.pid) 2>/dev/null
+        rm -f /run/dropbear.pid
     fi
-    eerror "Switch root target not mounted after dropbear init, ending session"
-    rd_fail
     """
 
 
@@ -24,7 +34,7 @@ def _process_dropbear_authorized_keys(self, authorized_key_path: Union[str, Path
     authorized_key_path = Path(authorized_key_path)
     if not authorized_key_path.exists():
         raise FileNotFoundError(f"[dropbear] Authorized_keys file not found at: {authorized_key_path}")
-    self.data["dropbear_authorized_keys"] = authorized_key_path
+    self.data["dropbear_authorized_keys"] = str(authorized_key_path)
 
 
 @contains("dropbear_authorized_keys", raise_exception=True)
@@ -38,37 +48,36 @@ def add_dropbear_keys(self):
     }
 
 
-def dropbear_wait(self):
-    """ Returns a shell script to sleep while dropbear is running """
-    return """
-    while [ "$(cat /proc/$(cat /run/dropbear.pid)/comm)" == "dropbear" ]; do
-        edebug "Dropbear is still running, sleeping"
-        sleep 1
-    done
-    einfo "Dropbear has stopped, continuing"
-    """
+def add_unlock_script(self):
+    """Generates and deploys the unlock helper script used as dropbear forced command.
+    The script prompts for the LUKS passphrase and exits — no shell access."""
+    # Build the unlock script lines
+    lines = [
+        "#!/bin/sh -l",
+        'einfo "Remote LUKS unlock session"',
+    ]
+
+    for name in self["cryptsetup"]:
+        lines += [
+            f"if cryptsetup status {name} > /dev/null 2>&1; then",
+            f'    einfo "Device already unlocked: {name}"',
+            "else",
+            f'    einfo "Unlocking: {name}"',
+            f"    cryptsetup open $(get_crypt_dev {name}) {name} --tries 3 || exit 1",
+            "fi",
+        ]
+
+    lines += ['einfo "Unlock complete, you may close this session."']
+
+    script_path = self._get_build_path(UNLOCK_SCRIPT)
+    script_path.parent.mkdir(parents=True, exist_ok=True)
+    self._write(UNLOCK_SCRIPT, "\n".join(lines) + "\n")
+    script_path.chmod(0o755)
+    self.logger.info("Wrote unlock script to: %s" % script_path)
+
 
 def dropbear_finalize(self):
-    """ Create a passwd entry for root if it doesn't exist, chmod 0600 the authorized_keys file """
+    """chmod 0600 the authorized_keys file and ensure passwd has root entry."""
     self._write("etc/passwd", "root:x:0:0:root:/root:/bin/sh\n", append=True)
     authorized_keys_file = self._get_build_path(self["copies"]["dropbear_authorized_keys"]["destination"])
     authorized_keys_file.chmod(0o600)
-
-def dropbear_init(self):
-    """Returns a shell script to start init_main using dropbear"""
-
-    custom_init_contents = [
-        self["shebang"],
-        f'einfo "Starting dropbear module v{__version__}"',
-        "print_banner",
-        *self.generate_init_main(),
-        "drop_the_bear",
-    ]
-
-    run_init = [  # Run dropbear as a daemon
-        "einfo Starting dropbear",
-        f"dropbear -R -E -j -k -s -c /{self['_custom_init_file']} -P /run/dropbear.pid || rd_fail",
-        "dropbear_wait",
-    ]
-
-    return run_init, custom_init_contents
