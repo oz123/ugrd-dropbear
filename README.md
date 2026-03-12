@@ -23,7 +23,7 @@ hook level (see Installation).
 
 ## Requirements
 
-- [ugrd](https://github.com/desultory/ugrd) — initramfs generator
+- [ugrd](https://github.com/desultory/ugrd) — initramfs generator (tested against v2.0.2, might work with 2.2.0).
 - `dropbear` — lightweight SSH server
 - `mkfifo`, `chmod` — from coreutils (included automatically)
 - A static IP configured for the initramfs network (via `ugrd.net.static`)
