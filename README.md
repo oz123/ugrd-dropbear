@@ -54,8 +54,8 @@ print('Patched')
 
 ```bash
 UGRD_PATH=$(python3 -c "import ugrd; print(ugrd.__path__[0])")
-sudo cp dropbear.py $UGRD_PATH/dropbear.py
-sudo cp dropbear.toml $UGRD_PATH/dropbear.toml
+sudo -E cp -v dropbear.py $UGRD_PATH/dropbear.py
+sudo -E cp -v dropbear.toml $UGRD_PATH/dropbear.toml
 ```
 
 ### 3. Set up host keys
