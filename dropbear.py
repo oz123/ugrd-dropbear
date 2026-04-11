@@ -9,7 +9,7 @@ from zenlib.util import contains
 def drop_the_bear(self) -> str:
     """Returns shell lines to kill the dropbear server if the switch_root_target is mounted"""
     return """
-    if [ -n "$(awk '$2 == "'"$(cat /run/vars/SWITCH_ROOT_TARGET)"'" {print $2}' /proc/mounts)" ]; then
+    if [ -n "$(awk -v target="$(readvar SWITCH_ROOT_TARGET)" '$2 == target {print $2}' /proc/mounts)" ]; then
         einfo "Switch root target mounted, killing dropbear."
         kill -9 $(cat /run/dropbear.pid)
         return
@@ -65,10 +65,17 @@ def dropbear_init(self):
         "drop_the_bear",
     ]
 
-    run_init = [  # Run dropbear as a daemon
+    run_init = [  # Run dropbear as a daemon, poll for SSH unlock or keypress for local unlock
         "einfo Starting dropbear",
         f"dropbear -R -E -j -k -s -c /{self['_custom_init_file']} -P /run/dropbear.pid || rd_fail",
-        "dropbear_wait",
+        f'einfo "Unlock remotely via SSH, or press any key to unlock locally"',
+        f'while [ "$(cat /proc/$(cat /run/dropbear.pid)/comm 2>/dev/null)" = "dropbear" ]; do',
+        f'    if read -t 1 -n 1 -r _key < /dev/console 2>/dev/null; then',
+        f'        einfo "Local unlock selected"',
+        f'        . /{self["_custom_init_file"]}',
+        f'        break',
+        f'    fi',
+        f'done',
     ]
 
     return run_init, custom_init_contents
