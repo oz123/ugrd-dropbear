@@ -1,9 +1,17 @@
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 from pathlib import Path
+from shutil import copy2
+from subprocess import run as run_proc
 from typing import Union
 
 from zenlib.util import contains
+
+DROPBEAR_KEY_TYPES = {
+    "dropbear_ecdsa_host_key": "ecdsa",
+    "dropbear_ed25519_host_key": "ed25519",
+    "dropbear_rsa_host_key": "rsa",
+}
 
 
 def drop_the_bear(self) -> str:
@@ -49,10 +57,23 @@ def dropbear_wait(self):
     """
 
 def dropbear_finalize(self):
-    """ Create a passwd entry for root if it doesn't exist, chmod 0600 the authorized_keys file """
+    """ Create a passwd entry for root if it doesn't exist, chmod 0600 the authorized_keys file.
+    Generate dropbear host keys in /etc/dropbear if they do not already exist. """
     self._write("etc/passwd", "root:x:0:0:root:/root:/bin/sh\n", append=True)
     authorized_keys_file = self._get_build_path(self["copies"]["dropbear_authorized_keys"]["destination"])
     authorized_keys_file.chmod(0o600)
+
+    key_dir = Path("/etc/dropbear")
+    key_dir.mkdir(parents=True, exist_ok=True)
+    for key_file, key_type in DROPBEAR_KEY_TYPES.items():
+        key_path = key_dir / key_file
+        if not key_path.exists():
+            self.logger.info("[dropbear] Generating %s host key: %s" % (key_type, key_path))
+            run_proc(["dropbearkey", "-t", key_type, "-f", str(key_path)], check=True)
+        dest = self._get_build_path(f"/etc/dropbear/{key_file}")
+        self.logger.info("[dropbear] Copying host key to initramfs: %s" % key_file)
+        copy2(key_path, dest)
+        dest.chmod(0o600)
 
 def dropbear_init(self):
     """Returns a shell script to start init_main using dropbear"""
@@ -67,7 +88,7 @@ def dropbear_init(self):
 
     run_init = [  # Run dropbear as a daemon, poll for SSH unlock or keypress for local unlock
         "einfo Starting dropbear",
-        f"dropbear -R -E -j -k -s -c /{self['_custom_init_file']} -P /run/dropbear.pid || rd_fail",
+        f"dropbear -E -j -k -s -c /{self['_custom_init_file']} -P /run/dropbear.pid || rd_fail",
         f'einfo "Unlock remotely via SSH, or press any key to unlock locally"',
         f'while [ "$(cat /proc/$(cat /run/dropbear.pid)/comm 2>/dev/null)" = "dropbear" ]; do',
         f'    if read -t 1 -n 1 -r _key < /dev/console 2>/dev/null; then',
